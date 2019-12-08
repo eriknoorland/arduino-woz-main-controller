@@ -1,0 +1,38 @@
+#ifndef MotionController_h
+#define MotionController_h
+
+#include "MotorController.h"
+
+class MotionController {
+  public:
+    MotionController(MotorController leftMotorController, MotorController rightMotorController, int loopTime);
+    void setup();
+    void loop();
+    void update();
+    void forward(int speed, int distance);
+    void reverse(int speed, int distance);
+    void rotate(int speed, int angle, int direction);
+    void turn(int speed, int angle, int radius, int direction);
+    void drive(int speedLeft, int speedRight);
+    void stop(bool hard);
+    void onLeftEncoderTick();
+    void onRightEncoderTick();
+
+  private:
+    int _leftMotorDirection;
+    int _rightMotorDirection;
+    int _targetDistance;
+    int _targetCommand;
+    int _accTicks;
+    float _wheelBaseCircumference;
+    float _wheelCircumference;
+    float _numTicksPerRevolution;
+    float _distancePerTick;
+    int _maxTickSpeed;
+    MotorController _leftMotorController;
+    MotorController _rightMotorController;
+
+    void distanceHandler(int leftTicks, int rightTicks);
+};
+
+#endif
