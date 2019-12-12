@@ -207,9 +207,6 @@ void drive(int speedLeft, int speedRight) {
  * @param hard
  */
 void stop(bool hard = false) {
-  leftMotorDirection = 0;
-  rightMotorDirection = 0;
-
   int decelerationDuration = getDecelerationDuration(0);
 
   leftMotorController.stop(hard, hard ? 1 : decelerationDuration);
