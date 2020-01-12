@@ -159,7 +159,7 @@ void rotate(int speed, int angle, int direction = 0) {
   isDecelerating = false;
   accTicks = 0;
 
-  int distance = wheelBaseCircumference / (360 / angle);
+  float distance = wheelBaseCircumference / (360 / (float) angle);
   int accelerationDuration = getDecelerationDuration(speed);
   float decelerationDistance = getDecelerationDistance(speed - minSpeed, accelerationDuration);
   numDecelerationTargetTicks = getTargetTicks(distance - decelerationDistance - decelerationOffset);
