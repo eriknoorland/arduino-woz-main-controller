@@ -2,6 +2,7 @@
 #define MotorController_h
 
 #include "Arduino.h"
+#include "Ramp.h"
 
 class MotorController {
   public:
@@ -11,6 +12,8 @@ class MotorController {
     void move(int speed, int direction, int accelerationDuration);
     void stop(bool hard, int decelerationDuration);
     void changeSpeed(int speed, int decelerationDuration);
+    void correctSpeed(int speed);
+    int getSpeed();
     void onEncoderTick();
     int onTimerInterrupt();
 
@@ -28,6 +31,7 @@ class MotorController {
     bool _hardStop;
     unsigned long _numTicks;
     unsigned long _numLastTicks;
+    ramp _speedRamp;
     void motorControl(int pwm1, int pwm2);
     int ticksToPwm(int tickSpeed, int maxSpeed);
 };

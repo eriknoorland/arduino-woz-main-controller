@@ -1,12 +1,9 @@
 #include "Arduino.h"
-#include "Ramp.h"
 #include "MotorController.h"
 
-ramp speedRamp;
-
 float Kp = 0.065;
-float Ki = 0.003;
-float Kd = 0.01;
+float Ki = 0.04;
+float Kd = 0.0025;
 
 /**
  * MotorController
@@ -22,7 +19,7 @@ MotorController::MotorController(int maxSpeed, float numTicksPerRevolution, floa
   _loopTime = loopTime;
 
   _numTicks = 0;
-  _numLastTicks = _numTicks;
+  _numLastTicks = 0;
   _goalSpeed = 0;
   _direction = 0;
   _lastError = 0;
@@ -58,7 +55,23 @@ void MotorController::setup(int enable, int enableB, int pwm1, int pwm2, int enc
  * Loop
  */
 void MotorController::loop() {
-  speedRamp.update();
+  _speedRamp.update();
+}
+
+/**
+ * Correct speed
+ * @param speed
+ */
+void MotorController::correctSpeed(int speed) {
+  float revolutionsPerSecond = speed / _wheelCircumference;
+  float ticksPerSecond = _numTicksPerRevolution * revolutionsPerSecond;
+  int ticksSpeed = ticksPerSecond / (1000 / _loopTime);
+  int pwmSpeed = constrain(ticksToPwm(ticksSpeed, _maxSpeed), 0, 255);
+
+  motorControl(
+    _direction == 1 ? constrain(pwmSpeed, 0, 255) : 0,
+    _direction == -1 ? constrain(pwmSpeed, 0, 255) : 0
+  );
 }
 
 /**
@@ -75,7 +88,7 @@ void MotorController::move(int speed, int direction, int accelerationDuration) {
   _direction = direction;
   _hardStop = false;
 
-  speedRamp.go(_goalSpeed, accelerationDuration, LINEAR);
+  _speedRamp.go(_goalSpeed, accelerationDuration, LINEAR);
 }
 
 /**
@@ -89,7 +102,7 @@ void MotorController::stop(bool hard, int decelerationDuration) {
   _goalSpeed = 0;
   _hardStop = hard;
 
-  speedRamp.go(_goalSpeed, duration, LINEAR);
+  _speedRamp.go(_goalSpeed, duration, LINEAR);
 }
 
 /**
@@ -98,9 +111,19 @@ void MotorController::stop(bool hard, int decelerationDuration) {
  * @param decelerationDuration
  */
 void MotorController::changeSpeed(int speed, int decelerationDuration) {
-  _goalSpeed = speed;
+  move(speed, _direction, decelerationDuration);
+}
 
-  speedRamp.go(_goalSpeed, decelerationDuration, LINEAR);
+/**
+ * Returns the current speed
+ * @return int
+ */
+int MotorController::getSpeed() {
+  int tickSpeed = _speedRamp.value();
+  int ticksPerSecond = tickSpeed * (1000 / _loopTime);
+  int speed = round(ticksPerSecond / (_numTicksPerRevolution / _wheelCircumference));
+
+  return speed;
 }
 
 /**
@@ -119,11 +142,21 @@ void MotorController::motorControl(int pwm1, int pwm2) {
  */
 int MotorController::onTimerInterrupt() {
   int deltaTicks = _numTicks - _numLastTicks;
-  int error = _goalSpeed - deltaTicks;
-  float p = Kp * error;
-  float i = _iAcc + (_loopTime * error * Ki);
-  float d = Kd * ((error - _lastError) / _loopTime);
-  int ticksSpeed = p + i + d;
+  int error = _speedRamp.value() - deltaTicks;
+  float i = _iAcc + (_loopTime * error);
+  float d = (error - _lastError) / _loopTime;
+  int ticksSpeed = (Kp * error) + (Ki * i) + (Kd * d);
+
+  // Serial.print(_goalSpeed);
+  // Serial.print("\t");
+  // Serial.print(_speedRamp.value());
+  // Serial.print("\t");
+  // Serial.print(deltaTicks);
+  // Serial.print("\t");
+  // Serial.print(error);
+  // Serial.print("\t");
+  // Serial.print(ticksSpeed);
+  // Serial.println(" ");
 
   _numLastTicks = _numTicks;
   _lastError = error;
@@ -137,8 +170,8 @@ int MotorController::onTimerInterrupt() {
   }
 
   motorControl(
-    _direction == 1 ? constrain(pwmSpeed, 0, 255) : 0,
-    _direction == -1 ? constrain(pwmSpeed, 0, 255) : 0
+    _direction == 1 ? pwmSpeed : 0,
+    _direction == -1 ? pwmSpeed : 0
   );
 
   return deltaTicks;

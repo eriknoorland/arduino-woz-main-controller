@@ -15,38 +15,44 @@ Dedicated firmware to manage the motor drivers and the IMU.
 
 ## Requests Overview
 
-| Request   | Value  | Payload                                                             |
-|-----------|--------|---------------------------------------------------------------------|
-| FORWARD   | `0x10` | speed (1 byte), distance (1 byte) [optional]                        |
-| REVERSE   | `0x11` | speed (1 byte), distance (1 byte) [optional]                        |
-| ROTATE    | `0x12` | speed (1 byte), angle (1 byte), direction (1 bit)                   |
-| TURN      | `0x13` | speed (1 byte), angle (1 byte), radius (1 byte), direction (1 bit) |
-| DRIVE     | `0x14` | speed left (1 byte), speed right (1 byte)                           |
-| STOP      | `0x15` | hard stop (1 bit)                                                   |
-| RESET_IMU | `0x20` | N/A                                                                 |
+| Request      | Value  | Payload                                                                                               |
+|--------------|--------|----------------------------------------------------------------------------------------------------|
+| KEEP_HEADING | `0x16` | speed in mm/s (2 bytes), heading (2 bytes), direction (1 bit), distance in mm (2 bytes) [optional] |
+| FORWARD      | `0x10` | speed in mm/s (2 bytes), distance in mm (2 bytes) [optional]                                       |
+| REVERSE      | `0x11` | speed in mm/s (2 bytes), distance in mm (2 bytes) [optional]                                       |
+| ROTATE       | `0x12` | speed in mm/s (2 bytes), angle (1 byte), direction (1 bit)                                         |
+| TURN         | `0x13` | speed in mm/s (2 bytes), angle (1 byte), radius (1 byte), direction (1 bit)                        |
+| DRIVE        | `0x14` | speed left in mm/s left (2 bytes), speed right in mm/s (2 bytes)                                   |
+| STOP         | `0x15` | hard stop (1 bit)                                                                                  |
+| RESET_IMU    | `0x20` | N/A                                                                                                |
+
+## Motors Keep Heading Request
+Request: `0xA3` `0x16` `0x[speed 15:8]` `0x[speed 7:0]` `0x[heading]` `0x[0, 0, 0, 0, 0, 0, 0, direction]` `0x[distance 15:8]` `0x[distance 7:0]`
+
+Moves the robot forward in a straight line.
 
 ## Motors Forward Request
-Request: `0xA3` `0x10` `0x[speed]` `0x[distance]`
+Request: `0xA3` `0x10` `0x[speed 15:8]` `0x[speed 7:0]` `0x[distance 15:8]` `0x[distance 7:0]`
 
 Moves the robot forward in a straight line.
 
 ## Motors Reverse Request
-Request: `0xA3` `0x11` `0x[speed]` `0x[distance]`
+Request: `0xA3` `0x11` `0x[speed 15:8]` `0x[speed 7:0]` `0x[distance 15:8]` `0x[distance 7:0]`
 
 Moves the robot backward in a straight line.
 
 ## Motors Rotate Request
-Request: `0xA3` `0x12` `0x[speed]` `0x[angle]` `0x[0, 0, 0, 0, 0, 0, 0, direction]`
+Request: `0xA3` `0x12` `0x[speed 15:8]` `0x[speed 7:0]` `0x[angle]` `0x[0, 0, 0, 0, 0, 0, 0, direction]`
 
 Rotates the robot to a given angle in a given direction (1 is left, 0 is right).
 
 ## Motors Turn Request
-Request: `0xA3` `0x13` `0x[speed]` `0x[angle]` `0x[radius]` `0x[0, 0, 0, 0, 0, 0, 0, direction]`
+Request: `0xA3` `0x13` `0x[speed 15:8]` `0x[speed 7:0]` `0x[angle]` `0x[radius]` `0x[0, 0, 0, 0, 0, 0, 0, direction]`
 
 Turns the robot while driving with a given radius in a given direction (1 is left, 0 is right).
 
 ## Motors Drive Request
-Request: `0xA3` `0x14` `0x[speed left]` `0x[speed right]`
+Request: `0xA3` `0x14` `0x[speed left 15:8]` `0x[speed left 7:0]` `0x[speed right 15:8]` `0x[speed right 7:0]`
 
 This freestyle mode let's you set the. left and right speed separately. Mostly used for line following.
 
