@@ -31,6 +31,7 @@ class MotorController {
     bool _hardStop;
     unsigned long _numTicks;
     unsigned long _numLastTicks;
+    int _tickSpeed;
     ramp _speedRamp;
     void motorControl(int pwm1, int pwm2);
     int ticksToPwm(int tickSpeed, int maxSpeed);

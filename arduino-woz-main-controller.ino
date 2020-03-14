@@ -28,11 +28,12 @@
 #define RESPONSE_ODOMETRY 0x30
 #define RESPONSE_READY 0xFF
 
-int loopTime = 1000 / 50; // ms
+int frequency = 50; // Hz
+int loopTime = 1000 / frequency; // ms
 int maxRPM = 160;
-int encoderCPR = 48; // (two pin encoder, double edge)
+int encoderCPR = 48; // two pin encoder, double edge
 float gearRatio = 46.85;
-float wheelBase = 167.5; // mm
+float wheelBase = 168; // mm
 float wheelBaseCircumference = PI * wheelBase; // mm
 float wheelCircumference = PI * 60; // mm
 float numTicksPerRevolution = gearRatio * encoderCPR;
@@ -40,20 +41,14 @@ float distancePerTick = wheelCircumference / numTicksPerRevolution; // mm
 int maxTickSpeed = (int) ((maxRPM * numTicksPerRevolution) / 60) / (1000 / loopTime); // ticks/loopTime
 int minSpeed = 20; // mm/s
 int maxSpeed = 430; // mm/s
-int currentSpeed = 0; // mm/s
-int maxDecelerationDuration = 2000; // ms
 
-bool isImuDetected = false;
+int leftMotorSpeed = 0; // mm/s
+int rightMotorSpeed = 0; // mm/s
 int leftMotorDirection = 0;
 int rightMotorDirection = 0;
-int targetCommand = 0;
-int accTicks = 0;
-float lastPhi = 0.0;
 
-bool isDecelerating = false;
-int numDecelerationTargetTicks = 0;
-int numTargetTicks = 0;
-int targetHeading = -1;
+bool isImuDetected = false;
+float lastPhi = 0.0;
 
 MotorController leftMotorController(maxTickSpeed, numTicksPerRevolution, wheelCircumference, loopTime);
 MotorController rightMotorController(maxTickSpeed, numTicksPerRevolution, wheelCircumference, loopTime);
@@ -62,9 +57,28 @@ Adafruit_BNO055 bno = Adafruit_BNO055(55);
 
 PacketSerial serial;
 
+struct MotionTarget {
+  int command;
+  int heading;
+  bool isDecelerating;
+  int decelerationDuration;
+  int numDecelerationTargetTicks;
+  int numTargetTicks;
+  int accTicks;
+};
+
+MotionTarget motionTarget;
+
+/**
+ * Resets the motion target to defaul values
+ */
+void resetMotionTarget() {
+  motionTarget = { 0, -1, false, 0, 0, 0, 0 };
+}
+
 /**
  * Returns the number of ticks required for the given distance
- * @param distance
+ * @param {int} distance
  * @return int
  */
 int getTargetTicks(int distance) {
@@ -73,20 +87,23 @@ int getTargetTicks(int distance) {
 
 /**
  * Returns the deceleration duration based on the current and desired speed
- * @param speed
+ * @param {int} currentSpeed
+ * @param {int} speed
+ * @param {int} maxDecelerationDuration (ms)
  * @return int
  */
-int getDecelerationDuration(int speed) {
+int getDecelerationDuration(int currentSpeed, int speed, int maxDecelerationDuration = 2000) {
   return round(map(abs(currentSpeed - speed), 0, maxSpeed, 0, maxDecelerationDuration));
 }
 
 /**
  * Returns the deceleration distance for the given speed and deceleration duration
- * @param speed
- * @param decelerationDuration
+ * @param {int} currentSpeed
+ * @param {int} speed
+ * @param {int} decelerationDuration
  * @return
  */
-float getDecelerationDistance(int speed, int decelerationDuration) {
+float getDecelerationDistance(int currentSpeed, int speed, int decelerationDuration) {
   int speedDiff = abs(speed - currentSpeed);
   float decelerationDistance = (speedDiff * ((float) decelerationDuration / 1000)) / 2;
 
@@ -95,8 +112,8 @@ float getDecelerationDistance(int speed, int decelerationDuration) {
 
 /**
  * Returns a signed difference between the given angles
- * @param target
- * @param current
+ * @param {int} target
+ * @param {int} current
  * @return
  */
 int getRelativeAngleDifference(int target, int current) {
@@ -105,9 +122,9 @@ int getRelativeAngleDifference(int target, int current) {
 
 /**
  * Straight
- * @param speed
- * @param direction
- * @param distance
+ * @param {int} speed
+ * @param {int} direction
+ * @param {int} distance
  */
 void straight(int speed, int direction, int distance = 0) {
   speed = constrain(speed, minSpeed, maxSpeed);
@@ -115,75 +132,79 @@ void straight(int speed, int direction, int distance = 0) {
   leftMotorDirection = direction == 1 ? 1 : -1;
   rightMotorDirection = direction == 1 ? -1 : 1;
 
-  targetCommand = direction == 1 ? REQUEST_FORWARD : REQUEST_REVERSE;
-  isDecelerating = false;
-  accTicks = 0;
+  int decelerationDuration = getDecelerationDuration(leftMotorSpeed, speed); // FIXME current speed parameter
 
-  int accelerationDuration = getDecelerationDuration(speed);
+  motionTarget.command = direction == 1 ? REQUEST_FORWARD : REQUEST_REVERSE;
+  motionTarget.accTicks = 0;
+  motionTarget.isDecelerating = false;
+  motionTarget.decelerationDuration = decelerationDuration;
 
   if (distance != 0) {
     int decelerationOffset = round(speed / 8); // mm
-    float decelerationDistance = getDecelerationDistance(speed - minSpeed, accelerationDuration); // mm
-    numDecelerationTargetTicks = getTargetTicks(distance - decelerationDistance - decelerationOffset);
-    numTargetTicks = getTargetTicks(distance);
+    float decelerationDistance = getDecelerationDistance(0, speed - minSpeed, decelerationDuration); // mm
+
+    motionTarget.numDecelerationTargetTicks = getTargetTicks(distance - decelerationDistance - decelerationOffset);
+    motionTarget.numTargetTicks = getTargetTicks(distance);
   }
 
-  leftMotorController.move(speed, leftMotorDirection, accelerationDuration);
-  rightMotorController.move(speed, rightMotorDirection, accelerationDuration);
+  leftMotorController.move(speed, leftMotorDirection, decelerationDuration);
+  rightMotorController.move(speed, rightMotorDirection, decelerationDuration);
 }
 
 /**
  * Keep heading
- * @param speed
- * @param heading
- * @param direction
- * @param distance
+ * @param {int} speed
+ * @param {int} heading
+ * @param {int} direction
+ * @param {int} distance
  */
 void keepHeading(int speed, int heading, int direction, int distance = 0) {
-  targetHeading = heading;
+  motionTarget.heading = heading;
 
   straight(speed, direction == 1 ? 1 : -1, distance);
 
-  targetCommand = REQUEST_KEEP_HEADING;
+  motionTarget.command = REQUEST_KEEP_HEADING;
 }
 
 /**
  * Rotate
- * @param speed
- * @param angle
- * @param direction
+ * @param {int} speed
+ * @param {int} angle
+ * @param {int} direction
  */
 void rotate(int speed, int angle, int direction = 0) {
   leftMotorDirection = direction == 1 ? -1 : 1;
   rightMotorDirection = direction == 1 ? -1 : 1;
 
-  targetCommand = REQUEST_ROTATE;
-  isDecelerating = false;
-  accTicks = 0;
-
-  int decelerationOffset = round(speed / 8); // mm
+  int decelerationOffset = 10; // mm
+  int decelerationDuration = 250; // getDecelerationDuration(speed, 500);
   float distance = wheelBaseCircumference / (360 / (float) angle); // mm
-  int accelerationDuration = getDecelerationDuration(speed);
-  float decelerationDistance = getDecelerationDistance(speed - minSpeed, accelerationDuration);
-  numDecelerationTargetTicks = getTargetTicks(distance - decelerationDistance - decelerationOffset);
-  numTargetTicks = getTargetTicks(distance);
+  float decelerationDistance = getDecelerationDistance(0, speed - minSpeed, decelerationDuration);
 
-  leftMotorController.move(speed, leftMotorDirection, accelerationDuration);
-  rightMotorController.move(speed, rightMotorDirection, accelerationDuration);
+  motionTarget.command = REQUEST_ROTATE;
+  motionTarget.accTicks = 0;
+  motionTarget.isDecelerating = false;
+  motionTarget.decelerationDuration = decelerationDuration;
+
+  motionTarget.numDecelerationTargetTicks = getTargetTicks(distance - decelerationDistance - decelerationOffset);
+  motionTarget.numTargetTicks = getTargetTicks(distance);
+
+  leftMotorController.move(speed, leftMotorDirection, decelerationDuration);
+  rightMotorController.move(speed, rightMotorDirection, decelerationDuration);
 }
 
 /**
  * Turn
- * @param speed
- * @param angle
- * @param radius
- * @param direction
+ * @param {int} speed
+ * @param {int} angle
+ * @param {int} radius
+ * @param {int} direction
  */
 void turn(int speed, int angle, int radius, int direction = 0) {
   leftMotorDirection = direction == 1 ? -1 : 1;
   rightMotorDirection = direction == 1 ? 1 : -1;
 
-  targetCommand = REQUEST_TURN;
+  motionTarget.command = REQUEST_TURN;
 
   int speedLeft = speed; // FIXME calculate left speed based on radius
   int speedRight = speed; // FIXME calculate right speed based on radius
@@ -194,8 +215,8 @@ void turn(int speed, int angle, int radius, int direction = 0) {
 
 /**
  * Drive
- * @param speedLeft
- * @param speedRight
+ * @param {int} speedLeft
+ * @param {int} speedRight
  */
 void drive(int speedLeft, int speedRight) {
   leftMotorDirection = 1;
@@ -207,20 +228,22 @@ void drive(int speedLeft, int speedRight) {
 
 /**
  * Stop
- * @param hard
+ * @param {bool} hard
  */
 void stop(bool hard = false) {
-  int decelerationDuration = getDecelerationDuration(0);
+  int decelerationDuration = round(map(leftMotorSpeed, 0, maxSpeed, 0, 2000)); // FIXME current speed parameter
+  // int decelerationDuration = getDecelerationDuration(leftMotorSpeed, 0); // FIXME current speed parameter
 
   leftMotorController.stop(hard, hard ? 1 : decelerationDuration);
   rightMotorController.stop(hard, hard ? 1 : decelerationDuration);
 
   if (hard) {
-    currentSpeed = 0;
-    isDecelerating = false;
+    leftMotorSpeed = 0;
+    rightMotorSpeed = 0;
+    resetMotionTarget();
   }
 
-  targetHeading = -1;
+  motionTarget.heading = -1;
 }
 
 /**
@@ -234,8 +257,10 @@ void resetIMU() {
 
 /**
  * Heading handler
- * @param current
- * @param target
+ * @param {int} current
+ * @param {int} target
+ * @param {int} numLeftTicks
+ * @param {int} numRightTicks
  */
 void headingHandler(int current, int target, int numLeftTicks, int numRightTicks) {
   float distanceLeft = distancePerTick * numLeftTicks;
@@ -273,36 +298,33 @@ void headingHandler(int current, int target, int numLeftTicks, int numRightTicks
 
 /**
  * Distance handler
+ * @param {int} numLeftTicks
+ * @param {int} numRightTicks
  */
-void distanceHandler(int leftTicks, int rightTicks) {
-  accTicks += (leftTicks + rightTicks) / 2;
+void distanceHandler(int numLeftTicks, int numRightTicks) {
+  motionTarget.accTicks += (numLeftTicks + numRightTicks) / 2;
 
-  if (!isDecelerating && accTicks >= numDecelerationTargetTicks) {
-    isDecelerating = true;
+  if (!motionTarget.isDecelerating && motionTarget.accTicks >= motionTarget.numDecelerationTargetTicks) {
+    motionTarget.isDecelerating = true;
 
-    int decelerationDuration = getDecelerationDuration(minSpeed);
-
-    leftMotorController.changeSpeed(minSpeed, decelerationDuration);
-    rightMotorController.changeSpeed(minSpeed, decelerationDuration);
+    leftMotorController.changeSpeed(minSpeed, motionTarget.decelerationDuration);
+    rightMotorController.changeSpeed(minSpeed, motionTarget.decelerationDuration);
   }
 
-  if (accTicks >= numTargetTicks) {
-    stop(true);
-
-    if (targetCommand != 0) {
+  if (motionTarget.accTicks >= motionTarget.numTargetTicks) {
+    if (motionTarget.command != 0) {
       uint8_t response[4] = {
         RESPONSE_START_FLAG_1,
         RESPONSE_START_FLAG_2,
-        targetCommand,
+        motionTarget.command,
         0x00
       };
 
       serial.send(response, sizeof(response));
     }
 
-    targetCommand = 0;
-    numTargetTicks = 0;
-    targetHeading = -1;
+    stop(true);
+    resetMotionTarget();
   }
 }
 
@@ -319,7 +341,7 @@ void onPacketReceived(const uint8_t* buffer, size_t size) {
     switch (command) {
       case REQUEST_KEEP_HEADING: {
         int speed = (buffer[2] << 8) + buffer[3];
-        int distance = (buffer[6] << 8), buffer[7];
+        int distance = (buffer[6] << 8) + buffer[7];
 
         keepHeading(speed, buffer[4], bitRead(buffer[5], 0), distance);
         break;
@@ -327,7 +349,7 @@ void onPacketReceived(const uint8_t* buffer, size_t size) {
 
       case REQUEST_FORWARD: {
         int speed = (buffer[2] << 8) + buffer[3];
-        int distance = (buffer[4] << 8), buffer[5];
+        int distance = (buffer[4] << 8) + buffer[5];
 
         straight(speed, 1, distance);
         break;
@@ -335,7 +357,7 @@ void onPacketReceived(const uint8_t* buffer, size_t size) {
 
       case REQUEST_REVERSE: {
         int speed = (buffer[2] << 8) + buffer[3];
-        int distance = (buffer[4] << 8), buffer[5];
+        int distance = (buffer[4] << 8) + buffer[5];
 
         straight(speed, -1, distance);
         break;
@@ -382,10 +404,10 @@ void onTimerInterrupt() {
   byte deltaLeftTicks = leftMotorController.onTimerInterrupt();
   byte deltaRightTicks = rightMotorController.onTimerInterrupt();
 
-  currentSpeed = round((((deltaLeftTicks + deltaRightTicks) / 2) * distancePerTick) * 50); // mm/s
-  // currentSpeed = round((deltaLeftTicks * distancePerTick) * 50); // mm/s
+  leftMotorSpeed = deltaLeftTicks * distancePerTick * frequency; // mm/s
+  rightMotorSpeed = deltaLeftTicks * distancePerTick * frequency; // mm/s
 
-  if (numTargetTicks != 0) {
+  if (motionTarget.numTargetTicks != 0) {
     distanceHandler(deltaLeftTicks, deltaRightTicks);
   }
 
@@ -400,9 +422,9 @@ void onTimerInterrupt() {
     headingPartMsb = heading >> 8;
     headingPartLsb = heading;
 
-    if (targetHeading != -1) {
-      headingHandler(round(heading / 100), targetHeading, deltaLeftTicks, deltaRightTicks);
-    }
+    // if (motionTarget.heading != -1) {
+    //   headingHandler(round(heading / 100), motionTarget.heading, deltaLeftTicks, deltaRightTicks);
+    // }
   }
 
   uint8_t response[10] = {
@@ -443,6 +465,8 @@ void setup() {
   serial.setStream(&Serial);
   serial.setPacketHandler(&onPacketReceived);
 
+  analogWriteResolution(10);
+
   leftMotorController.setup(4, 5, 6, 12, MOTOR_LEFT_ENCODER_A_PIN, MOTOR_LEFT_ENCODER_B_PIN);
   rightMotorController.setup(8, 9, 10, 11, MOTOR_RIGHT_ENCODER_A_PIN, MOTOR_RIGHT_ENCODER_B_PIN);
 
@@ -463,6 +487,8 @@ void setup() {
 
   while (!Serial) {}
 
+  resetMotionTarget();
+
   uint8_t readyResponse[5] = {
     RESPONSE_START_FLAG_1,
     RESPONSE_START_FLAG_2,
@@ -472,14 +498,7 @@ void setup() {
   };
 
   serial.send(readyResponse, sizeof(readyResponse));
-
-  // keepHeading(300, 0, 1, 500);
-  // straight(200, 1);
 }
-
-// bool isRunning = false;
-// unsigned long previousMillis = 0;
-// int count = 0;
 
 /**
  * Loop
@@ -488,31 +507,4 @@ void loop() {
   leftMotorController.loop();
   rightMotorController.loop();
   serial.update();
-
-  // unsigned long currentMillis = millis();
-
-  // if (count == 0 && currentMillis - previousMillis > 8000) {
-  //   count++;
-  //   stop();
-  // }
-
-  ////////////////////////
-
-  // if (count < 2 && currentMillis - previousMillis > 5000) {
-  //   previousMillis = currentMillis;
-  //   isRunning = !isRunning;
-
-  //   if (isRunning) {
-  //     straight(200, 1, 200);
-  //   } else {
-  //     stop();
-  //   }
-
-  //   count++;
-  // }
-
-  // if (millis() % 3000 <= 40) {
-  //   isRunning ? straight(200, 1) : stop();
-  //   isRunning = !isRunning;
-  // }
 }

@@ -1,9 +1,11 @@
 #include "Arduino.h"
 #include "MotorController.h"
 
-float Kp = 0.065;
-float Ki = 0.04;
-float Kd = 0.0025;
+bool PWM_OUTPUT_DEBUG = true;
+
+float Kp = PWM_OUTPUT_DEBUG ? 0.5 : 0.025;
+float Ki = PWM_OUTPUT_DEBUG ? 0.1 : 0.02;
+float Kd = PWM_OUTPUT_DEBUG ? 0.5 : 0.0025;
 
 /**
  * MotorController
@@ -25,6 +27,7 @@ MotorController::MotorController(int maxSpeed, float numTicksPerRevolution, floa
   _lastError = 0;
   _iAcc = 0;
   _hardStop = false;
+  _tickSpeed = 0;
 }
 
 /**
@@ -66,11 +69,11 @@ void MotorController::correctSpeed(int speed) {
   float revolutionsPerSecond = speed / _wheelCircumference;
   float ticksPerSecond = _numTicksPerRevolution * revolutionsPerSecond;
   int ticksSpeed = ticksPerSecond / (1000 / _loopTime);
-  int pwmSpeed = constrain(ticksToPwm(ticksSpeed, _maxSpeed), 0, 255);
+  int pwmSpeed = constrain(ticksToPwm(ticksSpeed, _maxSpeed), 0, 1023);
 
   motorControl(
-    _direction == 1 ? constrain(pwmSpeed, 0, 255) : 0,
-    _direction == -1 ? constrain(pwmSpeed, 0, 255) : 0
+    _direction == 1 ? constrain(pwmSpeed, 0, 1023) : 0,
+    _direction == -1 ? constrain(pwmSpeed, 0, 1023) : 0
   );
 }
 
@@ -119,11 +122,13 @@ void MotorController::changeSpeed(int speed, int decelerationDuration) {
  * @return int
  */
 int MotorController::getSpeed() {
-  int tickSpeed = _speedRamp.value();
-  int ticksPerSecond = tickSpeed * (1000 / _loopTime);
-  int speed = round(ticksPerSecond / (_numTicksPerRevolution / _wheelCircumference));
+  return _tickSpeed;
 
-  return speed;
+  // int tickSpeed = _speedRamp.value();
+  // int ticksPerSecond = tickSpeed * (1000 / _loopTime);
+  // int speed = round(ticksPerSecond / (_numTicksPerRevolution / _wheelCircumference));
+
+  // return speed;
 }
 
 /**
@@ -145,24 +150,21 @@ int MotorController::onTimerInterrupt() {
   int error = _speedRamp.value() - deltaTicks;
   float i = _iAcc + (_loopTime * error);
   float d = (error - _lastError) / _loopTime;
-  int ticksSpeed = (Kp * error) + (Ki * i) + (Kd * d);
+  int pwmSpeed = 0;
 
-  // Serial.print(_goalSpeed);
-  // Serial.print("\t");
-  // Serial.print(_speedRamp.value());
-  // Serial.print("\t");
-  // Serial.print(deltaTicks);
-  // Serial.print("\t");
-  // Serial.print(error);
-  // Serial.print("\t");
-  // Serial.print(ticksSpeed);
-  // Serial.println(" ");
+  if (PWM_OUTPUT_DEBUG) {
+    float output = (Kp * error) + (Ki * i) + (Kd * d);
+
+    pwmSpeed = round(constrain(output, 0, 1023));
+  } else {
+    int ticksSpeed = (Kp * error) + (Ki * i) + (Kd * d);
+
+    pwmSpeed = constrain(ticksToPwm(ticksSpeed, _maxSpeed), 0, 1023);
+  }
 
   _numLastTicks = _numTicks;
   _lastError = error;
   _iAcc = i;
-
-  int pwmSpeed = constrain(ticksToPwm(ticksSpeed, _maxSpeed), 0, 255);
 
   if (_hardStop) {
     deltaTicks = 0;
@@ -191,5 +193,5 @@ void MotorController::onEncoderTick() {
  * @return
  */
 int MotorController::ticksToPwm(int tickSpeed, int maxSpeed) {
-  return round(tickSpeed * 255 / maxSpeed);
+  return round(tickSpeed * 1023 / maxSpeed);
 }
