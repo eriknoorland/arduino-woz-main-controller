@@ -15,7 +15,7 @@ Dedicated firmware to manage the motor drivers and the IMU.
 
 ## Requests Overview
 
-| Request      | Value  | Payload                                                                                               |
+| Request      | Value  | Payload                                                                                            |
 |--------------|--------|----------------------------------------------------------------------------------------------------|
 | KEEP_HEADING | `0x16` | speed in mm/s (2 bytes), heading (2 bytes), direction (1 bit), distance in mm (2 bytes) [optional] |
 | FORWARD      | `0x10` | speed in mm/s (2 bytes), distance in mm (2 bytes) [optional]                                       |
@@ -25,6 +25,8 @@ Dedicated firmware to manage the motor drivers and the IMU.
 | DRIVE        | `0x14` | speed left in mm/s left (2 bytes), speed right in mm/s (2 bytes)                                   |
 | STOP         | `0x15` | hard stop (1 bit)                                                                                  |
 | RESET_IMU    | `0x20` | N/A                                                                                                |
+| IS_READY     | `0x30` | N/A                                                                                                |
+| SET_DATA     | `0x31` |                                                                                                    |
 
 ## Motors Keep Heading Request
 Request: `0xA3` `0x16` `0x[speed 15:8]` `0x[speed 7:0]` `0x[heading]` `0x[0, 0, 0, 0, 0, 0, 0, direction]` `0x[distance 15:8]` `0x[distance 7:0]`
@@ -65,6 +67,11 @@ Stops both motors. When the hard bit is set to 1 it wil stop the motors immediat
 Request: `0xA3 0x20`
 
 Resets the IMU.
+
+## Is ready Request
+Request: `0xA3 0x30`
+
+Triggers the ready response. Apparently the Teensy does not reset on USB connection like the Arduino seems to do.
 
 ### Ready Response
 **Response:** `0xA3` `0x3A` `0xFF` `0x01` `0x[imu detection flag]`

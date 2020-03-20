@@ -21,6 +21,8 @@
 #define REQUEST_STOP 0x15
 #define REQUEST_KEEP_HEADING 0x16
 #define REQUEST_RESET_IMU 0x20
+#define REQUEST_IS_READY 0x30
+#define REQUEST_SET_DATA 0x31
 
 // response bytes
 #define RESPONSE_START_FLAG_1 0xA3
@@ -33,13 +35,14 @@ int loopTime = 1000 / frequency; // ms
 int maxRPM = 160;
 int encoderCPR = 48; // two pin encoder, double edge
 float gearRatio = 46.85;
-float wheelBase = 168; // mm
+float wheelBase = 168.08; // mm
+float wheelDiameter = 60; // mm
 float wheelBaseCircumference = PI * wheelBase; // mm
-float wheelCircumference = PI * 60; // mm
+float wheelCircumference = PI * wheelDiameter; // mm
 float numTicksPerRevolution = gearRatio * encoderCPR;
 float distancePerTick = wheelCircumference / numTicksPerRevolution; // mm
 int maxTickSpeed = (int) ((maxRPM * numTicksPerRevolution) / 60) / (1000 / loopTime); // ticks/loopTime
-int minSpeed = 20; // mm/s
+int minSpeed = 10; // mm/s
 int maxSpeed = 430; // mm/s
 
 int leftMotorSpeed = 0; // mm/s
@@ -50,8 +53,8 @@ int rightMotorDirection = 0;
 bool isImuDetected = false;
 float lastPhi = 0.0;
 
-MotorController leftMotorController(maxTickSpeed, numTicksPerRevolution, wheelCircumference, loopTime);
-MotorController rightMotorController(maxTickSpeed, numTicksPerRevolution, wheelCircumference, loopTime);
+MotorController leftMotorController = MotorController(maxTickSpeed, numTicksPerRevolution, wheelCircumference, loopTime);
+MotorController rightMotorController = MotorController(maxTickSpeed, numTicksPerRevolution, wheelCircumference, loopTime);
 
 Adafruit_BNO055 bno = Adafruit_BNO055(55);
 
@@ -64,7 +67,8 @@ struct MotionTarget {
   int decelerationDuration;
   int numDecelerationTargetTicks;
   int numTargetTicks;
-  int accTicks;
+  int accLeftTicks;
+  int accRightTicks;
 };
 
 MotionTarget motionTarget;
@@ -73,7 +77,7 @@ MotionTarget motionTarget;
  * Resets the motion target to defaul values
  */
 void resetMotionTarget() {
-  motionTarget = { 0, -1, false, 0, 0, 0, 0 };
+  motionTarget = { 0, -1, false, 0, 0, 0, 0, 0 };
 }
 
 /**
@@ -92,7 +96,7 @@ int getTargetTicks(int distance) {
  * @param {int} maxDecelerationDuration (ms)
  * @return int
  */
-int getDecelerationDuration(int currentSpeed, int speed, int maxDecelerationDuration = 2000) {
+int getDecelerationDuration(int currentSpeed, int speed, int maxDecelerationDuration = 4000) {
   return round(map(abs(currentSpeed - speed), 0, maxSpeed, 0, maxDecelerationDuration));
 }
 
@@ -135,15 +139,16 @@ void straight(int speed, int direction, int distance = 0) {
   int decelerationDuration = getDecelerationDuration(leftMotorSpeed, speed); // FIXME current speed parameter
 
   motionTarget.command = direction == 1 ? REQUEST_FORWARD : REQUEST_REVERSE;
-  motionTarget.accTicks = 0;
+  motionTarget.accLeftTicks = 0;
+  motionTarget.accRightTicks = 0;
   motionTarget.isDecelerating = false;
   motionTarget.decelerationDuration = decelerationDuration;
 
   if (distance != 0) {
-    int decelerationOffset = round(speed / 8); // mm
+    int decelerationOffset = 10; // round(speed / 8); // mm
     float decelerationDistance = getDecelerationDistance(0, speed - minSpeed, decelerationDuration); // mm
 
-    motionTarget.numDecelerationTargetTicks = getTargetTicks(distance - decelerationDistance - decelerationOffset);
+    motionTarget.numDecelerationTargetTicks = getTargetTicks(distance - decelerationDistance - decelerationOffset) - 250;
     motionTarget.numTargetTicks = getTargetTicks(distance);
   }
 
@@ -177,16 +182,17 @@ void rotate(int speed, int angle, int direction = 0) {
   rightMotorDirection = direction == 1 ? -1 : 1;
 
   int decelerationOffset = 10; // mm
-  int decelerationDuration = 250; // getDecelerationDuration(speed, 500);
+  int decelerationDuration = 1000; // getDecelerationDuration(speed, 500);
   float distance = wheelBaseCircumference / (360 / (float) angle); // mm
   float decelerationDistance = getDecelerationDistance(0, speed - minSpeed, decelerationDuration);
 
   motionTarget.command = REQUEST_ROTATE;
-  motionTarget.accTicks = 0;
+  motionTarget.accLeftTicks = 0;
+  motionTarget.accRightTicks = 0;
   motionTarget.isDecelerating = false;
   motionTarget.decelerationDuration = decelerationDuration;
 
-  motionTarget.numDecelerationTargetTicks = getTargetTicks(distance - decelerationDistance - decelerationOffset);
+  motionTarget.numDecelerationTargetTicks = getTargetTicks(distance - decelerationDistance - decelerationOffset) - 65;
   motionTarget.numTargetTicks = getTargetTicks(distance);
 
   leftMotorController.move(speed, leftMotorDirection, decelerationDuration);
@@ -250,9 +256,30 @@ void stop(bool hard = false) {
  * Resets the IMU
  */
 void resetIMU() {
+  isImuDetected = false;
+
   digitalWrite(IMU_RESET_PIN, LOW);
-  delay(10);
+  delayMicroseconds(1);
   digitalWrite(IMU_RESET_PIN, HIGH);
+
+  if (bno.begin()) {
+    isImuDetected = true;
+  }
+}
+
+/**
+ * Send the ready response
+ */
+void isReady() {
+  uint8_t readyResponse[5] = {
+    RESPONSE_START_FLAG_1,
+    RESPONSE_START_FLAG_2,
+    RESPONSE_READY,
+    0x01,
+    isImuDetected
+  };
+
+  serial.send(readyResponse, sizeof(readyResponse));
 }
 
 /**
@@ -302,16 +329,19 @@ void headingHandler(int current, int target, int numLeftTicks, int numRightTicks
  * @param {int} numRightTicks
  */
 void distanceHandler(int numLeftTicks, int numRightTicks) {
-  motionTarget.accTicks += (numLeftTicks + numRightTicks) / 2;
+  motionTarget.accLeftTicks += numLeftTicks;
+  motionTarget.accRightTicks += numRightTicks;
 
-  if (!motionTarget.isDecelerating && motionTarget.accTicks >= motionTarget.numDecelerationTargetTicks) {
+  int accTicks = (motionTarget.accLeftTicks + motionTarget.accRightTicks) / 2;
+
+  if (!motionTarget.isDecelerating && accTicks >= motionTarget.numDecelerationTargetTicks) {
     motionTarget.isDecelerating = true;
 
     leftMotorController.changeSpeed(minSpeed, motionTarget.decelerationDuration);
     rightMotorController.changeSpeed(minSpeed, motionTarget.decelerationDuration);
   }
 
-  if (motionTarget.accTicks >= motionTarget.numTargetTicks) {
+  if (accTicks >= motionTarget.numTargetTicks) {
     if (motionTarget.command != 0) {
       uint8_t response[4] = {
         RESPONSE_START_FLAG_1,
@@ -393,6 +423,15 @@ void onPacketReceived(const uint8_t* buffer, size_t size) {
         resetIMU();
         break;
       }
+
+      case REQUEST_IS_READY: {
+        isReady();
+        break;
+      }
+
+      case REQUEST_SET_DATA: {
+        break;
+      }
     }
   }
 }
@@ -401,8 +440,8 @@ void onPacketReceived(const uint8_t* buffer, size_t size) {
  * Timer interrupt handler
  */
 void onTimerInterrupt() {
-  byte deltaLeftTicks = leftMotorController.onTimerInterrupt();
-  byte deltaRightTicks = rightMotorController.onTimerInterrupt();
+  int deltaLeftTicks = leftMotorController.onTimerInterrupt();
+  int deltaRightTicks = rightMotorController.onTimerInterrupt();
 
   leftMotorSpeed = deltaLeftTicks * distancePerTick * frequency; // mm/s
   rightMotorSpeed = deltaLeftTicks * distancePerTick * frequency; // mm/s
@@ -488,16 +527,7 @@ void setup() {
   while (!Serial) {}
 
   resetMotionTarget();
-
-  uint8_t readyResponse[5] = {
-    RESPONSE_START_FLAG_1,
-    RESPONSE_START_FLAG_2,
-    RESPONSE_READY,
-    0x01,
-    isImuDetected
-  };
-
-  serial.send(readyResponse, sizeof(readyResponse));
+  isReady();
 }
 
 /**
